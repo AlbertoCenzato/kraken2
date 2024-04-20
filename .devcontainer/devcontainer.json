@@ -1,0 +1,27 @@
+{
+	"name": "Kraken2",
+	"dockerFile": "Dockerfile",
+	"mounts": [
+		 {
+			"type": "volume",
+			"source": "kraken2-db",
+			"target": "/mnt/db"
+		}
+	],
+	"customizations": {
+		"vscode": {
+			"settings": {},
+			"extensions": [
+				"twxs.cmake",
+				"microsoft.cmaketools",
+				"ms-vscode.cpptools",
+				"ms-vscode.cpptools-extension-pack",
+				"fredericbonnet.cmake-test-adapter",
+				"ms-vscode.cmake-tools",
+				"jmfirth.vsc-space-block-jumper"
+			]
+		}
+	},
+	// fix line endings when working on windows host 
+	"postAttachCommand": "apt install -y dos2unix && find ${workspaceFolder} -type f -exec dos2unix {} \\; && apt remove -y dos2unix"
+}

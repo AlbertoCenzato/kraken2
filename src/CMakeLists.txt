@@ -47,4 +47,4 @@ add_executable(k2mask
         k2mask.cc
         seqreader.cc)
 
-target_link_libraries(dustmasker ${ZLIB_LIBRARIES} Threads::Threads)
+target_link_libraries(k2mask ${ZLIB_LIBRARIES})

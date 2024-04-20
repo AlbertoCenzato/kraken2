@@ -31,7 +31,7 @@ function download_file() {
   then
     wget -q ${FTP_SERVER}${file}
   else
-    rsync --no-motd ${RSYNC_SERVER}${file} .
+    rsync --no-motd --append-verify --info=progress2 --no-i-r --human-readable ${RSYNC_SERVER}${file} .
   fi
 }
 

@@ -119,7 +119,7 @@ if ($use_ftp) {
 }
 else {
   print STDERR "Step 1/2: Performing rsync file transfer of requested files\n";
-  system("rsync --no-motd --files-from=manifest.txt rsync://${SERVER}${SERVER_PATH}/ .") == 0
+  system("rsync --no-motd --files-from=manifest.txt --info=progress2 --append-verify --no-i-r --human-readable rsync://${SERVER}${SERVER_PATH}/ .") == 0
     or die "$PROG: rsync error, exiting: $?\n";
   print STDERR "Rsync file transfer complete.\n";
 }

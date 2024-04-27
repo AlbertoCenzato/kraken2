@@ -8,6 +8,9 @@
 			"target": "/mnt/db"
 		}
 	],
+	"remoteEnv": {
+		"PATH": "${containerEnv:PATH}:/workspaces/kraken2/build/src"
+	},
 	"customizations": {
 		"vscode": {
 			"settings": {},

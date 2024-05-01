@@ -48,24 +48,36 @@ struct Options {
   uint64_t toggle_mask;
   uint64_t min_clear_hash_value;
   bool deterministic_build;
+  string input_filename;
+};
+
+#pragma pack(4)
+struct IdxValue {
+  size_t idx;
+  uint32_t value;
 };
 
 void ParseCommandLine(int argc, char **argv, Options &opts);
 void usage(int exit_code = EX_USAGE);
 vector<string> ExtractNCBISequenceIDs(const string &header);
 void ProcessSequenceFast(const string &seq, taxid_t taxid,
-    CompactHashTable &hash, const Taxonomy &tax, MinimizerScanner &scanner,
-    uint64_t min_clear_hash_value);
+                         CompactHashTable &hash, const Taxonomy &tax,
+                         MinimizerScanner &scanner,
+                         uint64_t min_clear_hash_value);
 void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
-    CompactHashTable &hash, const Taxonomy &tax);
+                     CompactHashTable &hash, const Taxonomy &tax);
+std::vector<IdxValue> ProcessSequence2(const Options &opts, const string &seq,
+                                       taxid_t taxid, const Taxonomy &tax, size_t value_bits, 
+                                       size_t capacity);
 void ProcessSequencesFast(const Options &opts,
-    const map<string, taxid_t> &ID_to_taxon_map,
-    CompactHashTable &kraken_index, const Taxonomy &taxonomy);
-void ProcessSequences(const Options &opts,
-    const map<string, taxid_t> &ID_to_taxon_map,
-    CompactHashTable &kraken_index, const Taxonomy &taxonomy);
+                          const map<string, taxid_t> &ID_to_taxon_map,
+                          CompactHashTable &kraken_index,
+                          const Taxonomy &taxonomy);
+void ProcessSequences(std::istream &input_stream, const Options &opts,
+                      const map<string, taxid_t> &ID_to_taxon_map,
+                      const string &output_hash_file, const Taxonomy &taxonomy, size_t value_bits, size_t capacity);
 void SetMinimizerLCA(CompactHashTable &hash, uint64_t minimizer, taxid_t taxid,
-    const Taxonomy &tax);
+                     const Taxonomy &tax);
 void ReadIDToTaxonMap(map<string, taxid_t> &id_map, string &filename);
 void GenerateTaxonomy(Options &opts, map<string, taxid_t> &id_map);
 
@@ -86,9 +98,11 @@ int main(int argc, char **argv) {
   opts.min_clear_hash_value = 0;
   opts.maximum_capacity = 0;
   opts.deterministic_build = true;
+  opts.input_filename =
+      "/workspaces/kraken2/db/test/library/archaea/library.fna";
   ParseCommandLine(argc, argv, opts);
 
-  omp_set_num_threads( opts.num_threads );
+  omp_set_num_threads(opts.num_threads);
 
   map<string, taxid_t> ID_to_taxon_map;
 
@@ -100,7 +114,7 @@ int main(int argc, char **argv) {
   Taxonomy taxonomy(opts.taxonomy_filename.c_str());
   taxonomy.GenerateExternalToInternalIDMap();
   size_t bits_needed_for_value = 1;
-  while ((1 << bits_needed_for_value) < (ssize_t) taxonomy.node_count())
+  while ((1 << bits_needed_for_value) < (ssize_t)taxonomy.node_count())
     bits_needed_for_value++;
   if (opts.requested_bits_for_taxid > 0 &&
       bits_needed_for_value > opts.requested_bits_for_taxid)
@@ -115,17 +129,29 @@ int main(int argc, char **argv) {
     double frac = opts.maximum_capacity * 1.0 / opts.capacity;
     if (frac > 1)
       errx(EX_DATAERR, "maximum capacity larger than requested capacity");
-    opts.min_clear_hash_value = (uint64_t) ((1 - frac) * UINT64_MAX);
+    opts.min_clear_hash_value = (uint64_t)((1 - frac) * UINT64_MAX);
     actual_capacity = opts.maximum_capacity;
   }
 
   CompactHashTable kraken_index(actual_capacity, 32 - bits_for_taxid,
-      bits_for_taxid);
-  std::cerr << "CHT created with " << bits_for_taxid << " bits reserved for taxid." << std::endl;
+                                bits_for_taxid);
+  std::cerr << "CHT created with " << bits_for_taxid
+            << " bits reserved for taxid." << std::endl;
 
-  if (opts.deterministic_build)
-    ProcessSequences(opts, ID_to_taxon_map, kraken_index, taxonomy);
-  else
+  std::string output_hash_file = "/workspaces/kraken2/db/test/hashes.bin";
+  if (opts.deterministic_build) {
+    if (opts.input_filename.empty()) {
+      ProcessSequences(std::cin, opts, ID_to_taxon_map, output_hash_file,
+                       taxonomy, bits_for_taxid, actual_capacity);
+    } else {
+      ifstream input_file(opts.input_filename);
+      if (!input_file.good())
+        err(EX_NOINPUT, "unable to read from '%s'",
+            opts.input_filename.c_str());
+      ProcessSequences(input_file, opts, ID_to_taxon_map, output_hash_file,
+                       taxonomy, bits_for_taxid, actual_capacity);
+    }
+  } else
     ProcessSequencesFast(opts, ID_to_taxon_map, kraken_index, taxonomy);
 
   std::cerr << "Writing data to disk... " << std::flush;
@@ -136,14 +162,14 @@ int main(int argc, char **argv) {
   index_opts.l = opts.l;
   index_opts.spaced_seed_mask = opts.spaced_seed_mask;
   index_opts.toggle_mask = opts.toggle_mask;
-  index_opts.dna_db = ! opts.input_is_protein;
+  index_opts.dna_db = !opts.input_is_protein;
   index_opts.minimum_acceptable_hash_value = opts.min_clear_hash_value;
   index_opts.revcom_version = CURRENT_REVCOM_VERSION;
   index_opts.db_version = 0;
   index_opts.db_type = 0;
   ofstream opts_fs(opts.options_filename);
-  opts_fs.write((char *) &index_opts, sizeof(index_opts));
-  if (! opts_fs.good())
+  opts_fs.write((char *)&index_opts, sizeof(index_opts));
+  if (!opts_fs.good())
     errx(EX_OSERR, "Unable to write options file %s",
          opts.options_filename.c_str());
   opts_fs.close();
@@ -154,17 +180,17 @@ int main(int argc, char **argv) {
 
 // A quick but nondeterministic build
 void ProcessSequencesFast(const Options &opts,
-    const map<string, taxid_t> &ID_to_taxon_map,
-    CompactHashTable &kraken_index, const Taxonomy &taxonomy)
-{
+                          const map<string, taxid_t> &ID_to_taxon_map,
+                          CompactHashTable &kraken_index,
+                          const Taxonomy &taxonomy) {
   size_t processed_seq_ct = 0;
   size_t processed_ch_ct = 0;
 
-  #pragma omp parallel
+#pragma omp parallel
   {
     Sequence sequence;
     MinimizerScanner scanner(opts.k, opts.l, opts.spaced_seed_mask,
-                             ! opts.input_is_protein, opts.toggle_mask);
+                             !opts.input_is_protein, opts.toggle_mask);
 
     BatchSequenceReader reader;
 
@@ -172,77 +198,101 @@ void ProcessSequencesFast(const Options &opts,
       // Declaration of "ok" and break need to be done outside of critical
       // section to conform with OpenMP spec.
       bool ok;
-      #pragma omp critical(reader)
+#pragma omp critical(reader)
       ok = reader.LoadBlock(std::cin, opts.block_size);
-      if (! ok)
+      if (!ok)
         break;
       while (reader.NextSequence(sequence)) {
         auto all_sequence_ids = ExtractNCBISequenceIDs(sequence.header);
         taxid_t taxid = 0;
         for (auto &seqid : all_sequence_ids) {
-          if (ID_to_taxon_map.count(seqid) == 0 || ID_to_taxon_map.at(seqid) == 0) continue;
+          if (ID_to_taxon_map.count(seqid) == 0 ||
+              ID_to_taxon_map.at(seqid) == 0)
+            continue;
           auto ext_taxid = ID_to_taxon_map.at(seqid);
-          taxid = taxonomy.LowestCommonAncestor(taxid, taxonomy.GetInternalID(ext_taxid));
+          taxid = taxonomy.LowestCommonAncestor(
+              taxid, taxonomy.GetInternalID(ext_taxid));
         }
         if (taxid) {
           // Add terminator for protein sequences if not already there
           if (opts.input_is_protein && sequence.seq.back() != '*')
             sequence.seq.push_back('*');
-          ProcessSequenceFast(sequence.seq, taxid, kraken_index, taxonomy, scanner,
-            opts.min_clear_hash_value);
-          #pragma omp atomic
+          ProcessSequenceFast(sequence.seq, taxid, kraken_index, taxonomy,
+                              scanner, opts.min_clear_hash_value);
+#pragma omp atomic
           processed_seq_ct++;
-          #pragma omp atomic
+#pragma omp atomic
           processed_ch_ct += sequence.seq.size();
         }
       }
       if (isatty(fileno(stderr))) {
-        #pragma omp critical(status_update)
-        std::cerr << "\rProcessed " << processed_seq_ct << " sequences (" << processed_ch_ct << " " << (opts.input_is_protein ? "aa" : "bp") << ")...";
+#pragma omp critical(status_update)
+        std::cerr << "\rProcessed " << processed_seq_ct << " sequences ("
+                  << processed_ch_ct << " "
+                  << (opts.input_is_protein ? "aa" : "bp") << ")...";
       }
     }
   }
   if (isatty(fileno(stderr)))
     std::cerr << "\r";
-  std::cerr << "Completed processing of " << processed_seq_ct << " sequences, " << processed_ch_ct << " " << (opts.input_is_protein ? "aa" : "bp") << std::endl;
+  std::cerr << "Completed processing of " << processed_seq_ct << " sequences, "
+            << processed_ch_ct << " " << (opts.input_is_protein ? "aa" : "bp")
+            << std::endl;
 }
 
 // Slightly slower but deterministic when multithreaded
-void ProcessSequences(const Options &opts,
-    const map<string, taxid_t> &ID_to_taxon_map,
-    CompactHashTable &kraken_index, const Taxonomy &taxonomy)
-{
+void ProcessSequences(std::istream &input_stream, const Options &opts,
+                      const map<string, taxid_t> &ID_to_taxon_map,
+                      const string &base_hash_filename,
+                      const Taxonomy &taxonomy, size_t value_bits, size_t capacity) {
+  auto start = std::chrono::steady_clock::now();
   size_t processed_seq_ct = 0;
   size_t processed_ch_ct = 0;
 
   Sequence sequence;
   BatchSequenceReader reader;
 
-  while (reader.LoadBlock(std::cin, DEFAULT_BLOCK_SIZE)) {
+
+  auto output_file = std::ofstream(base_hash_filename, std::ios::binary);
+  while (reader.LoadBlock(input_stream, DEFAULT_BLOCK_SIZE)) {
     while (reader.NextSequence(sequence)) {
       auto all_sequence_ids = ExtractNCBISequenceIDs(sequence.header);
       taxid_t taxid = 0;
       for (auto &seqid : all_sequence_ids) {
-        if (ID_to_taxon_map.count(seqid) == 0 || ID_to_taxon_map.at(seqid) == 0) continue;
+        if (ID_to_taxon_map.count(seqid) == 0 || ID_to_taxon_map.at(seqid) == 0)
+          continue;
         auto ext_taxid = ID_to_taxon_map.at(seqid);
-        taxid = taxonomy.LowestCommonAncestor(taxid, taxonomy.GetInternalID(ext_taxid));
+        taxid = taxonomy.LowestCommonAncestor(
+            taxid, taxonomy.GetInternalID(ext_taxid));
       }
       if (taxid) {
         // Add terminator for protein sequences if not already there
         if (opts.input_is_protein && sequence.seq.back() != '*')
           sequence.seq.push_back('*');
-        ProcessSequence(opts, sequence.seq, taxid, kraken_index, taxonomy);
+        const auto hashes = ProcessSequence2(opts, sequence.seq, taxid, taxonomy, value_bits, capacity);
+        output_file.write(reinterpret_cast<const char *>(hashes.data()),
+                          hashes.size() * sizeof(IdxValue));
+
         processed_seq_ct++;
         processed_ch_ct += sequence.seq.size();
       }
     }
     if (isatty(fileno(stderr))) {
-      std::cerr << "\rProcessed " << processed_seq_ct << " sequences (" << processed_ch_ct << " " << (opts.input_is_protein ? "aa" : "bp") << ")...";
+      std::cerr << "\rProcessed " << processed_seq_ct << " sequences ("
+                << processed_ch_ct << " "
+                << (opts.input_is_protein ? "aa" : "bp") << ")...";
     }
   }
   if (isatty(fileno(stderr)))
     std::cerr << "\r";
-  std::cerr << "Completed processing of " << processed_seq_ct << " sequences, " << processed_ch_ct << " " << (opts.input_is_protein ? "aa" : "bp") << std::endl;
+  std::cerr << "Completed processing of " << processed_seq_ct << " sequences, "
+            << processed_ch_ct << " " << (opts.input_is_protein ? "aa" : "bp")
+            << std::endl;
+  auto end = std::chrono::steady_clock::now();
+  std::cerr << "Processing took "
+            << std::chrono::duration_cast<std::chrono::seconds>(end - start)
+                   .count()
+            << " seconds" << std::endl;
 }
 
 // This function exists to deal with NCBI's use of \x01 characters to denote
@@ -257,59 +307,129 @@ vector<string> ExtractNCBISequenceIDs(const string &header) {
   for (size_t i = 1; i < header.size(); ++i) {
     if (header[i] == 0x01) {
       // 0x01 starts new ID at next char
-      if (! current_str.empty())
+      if (!current_str.empty())
         list.push_back(current_str);
       current_str.clear();
       in_id = true;
-    }
-    else if (in_id && isspace(header[i])) {
+    } else if (in_id && isspace(header[i])) {
       // spaces end ID
-      if (! current_str.empty())
+      if (!current_str.empty())
         list.push_back(current_str);
       current_str.clear();
       in_id = false;
-    }
-    else if (in_id) {
+    } else if (in_id) {
       // Build ID string char by char
       current_str.push_back(header[i]);
     }
   }
-  if (! current_str.empty())
+  if (!current_str.empty())
     list.push_back(current_str);
   return list;
 }
 
 void SetMinimizerLCA(CompactHashTable &hash, uint64_t minimizer, taxid_t taxid,
-    const Taxonomy &tax)
-{
+                     const Taxonomy &tax) {
   hvalue_t old_value = 0;
   hvalue_t new_value = taxid;
-  while (! hash.CompareAndSet(minimizer, new_value, &old_value))
+  while (!hash.CompareAndSet(minimizer, new_value, &old_value))
     new_value = tax.LowestCommonAncestor(old_value, taxid);
 }
 
 void ProcessSequenceFast(const string &seq, taxid_t taxid,
-    CompactHashTable &hash, const Taxonomy &tax, MinimizerScanner &scanner,
-    uint64_t min_clear_hash_value)
-{
+                         CompactHashTable &hash, const Taxonomy &tax,
+                         MinimizerScanner &scanner,
+                         uint64_t min_clear_hash_value) {
   scanner.LoadSequence(seq);
   uint64_t *minimizer_ptr;
   while ((minimizer_ptr = scanner.NextMinimizer())) {
     if (scanner.is_ambiguous())
       continue;
-    if (min_clear_hash_value && MurmurHash3(*minimizer_ptr) < min_clear_hash_value)
+    if (min_clear_hash_value &&
+        MurmurHash3(*minimizer_ptr) < min_clear_hash_value)
       continue;
     hvalue_t existing_taxid = 0;
     hvalue_t new_taxid = taxid;
-    while (! hash.CompareAndSet(*minimizer_ptr, new_taxid, &existing_taxid)) {
+    while (!hash.CompareAndSet(*minimizer_ptr, new_taxid, &existing_taxid)) {
       new_taxid = tax.LowestCommonAncestor(new_taxid, existing_taxid);
     }
   }
 }
 
+IdxValue getIdxValue(hkey_t key, hvalue_t val, size_t value_bits, size_t capacity) {
+  uint64_t hc = MurmurHash3(key);
+  hkey_t compacted_key = hc >> (32 + value_bits);
+
+  size_t idx = hc % capacity;
+  uint32_t value = computeCompactHash(compacted_key, val, value_bits);
+  return IdxValue{.idx = idx, .value = value};
+}
+
+std::vector<IdxValue> ProcessSequence2(const Options &opts, const string &seq,
+                               taxid_t taxid, const Taxonomy &tax, size_t value_bits, 
+                               size_t capacity) {
+  const int set_ct = 256;
+  // for each block in the sequence
+  auto hashes = std::vector<IdxValue>{};
+  for (size_t j = 0; j < seq.size(); j += opts.block_size) {
+    // block: fixed length subsequence of DNA/protein, handled in series,
+    //   consecutive blocks overlap by k-1 characters
+    size_t block_start = j;
+    size_t block_finish = j + opts.block_size + opts.k - 1;
+    if (block_finish > seq.size())
+      block_finish = seq.size();
+    std::set<uint64_t> minimizer_sets[set_ct];
+
+    // for each subblock in the block, gather minimizers in parallel
+    for (size_t i = block_start; i < block_finish; i += opts.subblock_size) {
+      // subblock: fixed length subsequence of block, handled in parallel,
+      //   consecutive subblocks overlap by k-1 characters
+      MinimizerScanner scanner(opts.k, opts.l, opts.spaced_seed_mask,
+                               !opts.input_is_protein, opts.toggle_mask);
+      size_t subblock_finish = i + opts.subblock_size + opts.k - 1;
+      if (subblock_finish > block_finish)
+        subblock_finish = block_finish;
+      scanner.LoadSequence(seq, i, subblock_finish);
+      uint64_t *minimizer_ptr;
+      while ((minimizer_ptr = scanner.NextMinimizer())) {
+        if (scanner.is_ambiguous())
+          continue;
+        auto hc = MurmurHash3(*minimizer_ptr);
+        // Hash-based subsampling
+        if (opts.min_clear_hash_value && hc < opts.min_clear_hash_value)
+          continue;
+        auto zone = hc % set_ct;
+        minimizer_sets[zone].insert(*minimizer_ptr);
+      }
+    } // end subblock for loop
+
+    // combine sets into sorted list
+    std::vector<uint64_t> minimizer_lists[set_ct];
+    size_t minimizer_list_prefix_sizes[set_ct + 1] = {0};
+    for (int i = 0; i < set_ct; i++) {
+      minimizer_lists[i].reserve(minimizer_sets[i].size());
+      for (auto &m : minimizer_sets[i])
+        minimizer_lists[i].push_back(m);
+      sort(minimizer_lists[i].begin(), minimizer_lists[i].end());
+      minimizer_list_prefix_sizes[i + 1] = minimizer_lists[i].size();
+    }
+    for (int i = 2; i <= set_ct; i++)
+      minimizer_list_prefix_sizes[i] += minimizer_list_prefix_sizes[i - 1];
+    std::vector<uint64_t> minimizer_list(minimizer_list_prefix_sizes[set_ct]);
+    for (int i = 0; i < set_ct; i++) {
+      std::copy(minimizer_lists[i].begin(), minimizer_lists[i].end(),
+                minimizer_list.begin() + minimizer_list_prefix_sizes[i]);
+    }
+
+    for (auto minimizer : minimizer_list) {
+      const auto idx_value = getIdxValue(minimizer, taxid, value_bits, capacity);
+      hashes.push_back(idx_value);
+    }
+  }   // end block for loop
+  return hashes;
+}
+
 void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
-    CompactHashTable &hash, const Taxonomy &tax)
-{
+                     CompactHashTable &hash, const Taxonomy &tax) {
   const int set_ct = 256;
   omp_lock_t locks[set_ct];
   for (int i = 0; i < set_ct; i++)
@@ -324,13 +444,13 @@ void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
       block_finish = seq.size();
     std::set<uint64_t> minimizer_sets[set_ct];
 
-    // for each subblock in the block, gather minimizers in parallel
-    #pragma omp parallel for schedule(dynamic)
+// for each subblock in the block, gather minimizers in parallel
+#pragma omp parallel for schedule(dynamic)
     for (size_t i = block_start; i < block_finish; i += opts.subblock_size) {
       // subblock: fixed length subsequence of block, handled in parallel,
       //   consecutive subblocks overlap by k-1 characters
       MinimizerScanner scanner(opts.k, opts.l, opts.spaced_seed_mask,
-                               ! opts.input_is_protein, opts.toggle_mask);
+                               !opts.input_is_protein, opts.toggle_mask);
       size_t subblock_finish = i + opts.subblock_size + opts.k - 1;
       if (subblock_finish > block_finish)
         subblock_finish = block_finish;
@@ -348,26 +468,26 @@ void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
         minimizer_sets[zone].insert(*minimizer_ptr);
         omp_unset_lock(&locks[zone]);
       }
-    }  // end subblock for loop
+    } // end subblock for loop
 
     // combine sets into sorted list
     std::vector<uint64_t> minimizer_lists[set_ct];
-    size_t minimizer_list_prefix_sizes[set_ct+1] = {0};
-    #pragma omp parallel for
+    size_t minimizer_list_prefix_sizes[set_ct + 1] = {0};
+#pragma omp parallel for
     for (int i = 0; i < set_ct; i++) {
       minimizer_lists[i].reserve(minimizer_sets[i].size());
       for (auto &m : minimizer_sets[i])
         minimizer_lists[i].push_back(m);
       sort(minimizer_lists[i].begin(), minimizer_lists[i].end());
-      minimizer_list_prefix_sizes[i+1] = minimizer_lists[i].size();
+      minimizer_list_prefix_sizes[i + 1] = minimizer_lists[i].size();
     }
     for (int i = 2; i <= set_ct; i++)
-      minimizer_list_prefix_sizes[i] += minimizer_list_prefix_sizes[i-1];
+      minimizer_list_prefix_sizes[i] += minimizer_list_prefix_sizes[i - 1];
     std::vector<uint64_t> minimizer_list(minimizer_list_prefix_sizes[set_ct]);
-    #pragma omp parallel for
+#pragma omp parallel for
     for (int i = 0; i < set_ct; i++) {
       std::copy(minimizer_lists[i].begin(), minimizer_lists[i].end(),
-          minimizer_list.begin() + minimizer_list_prefix_sizes[i]);
+                minimizer_list.begin() + minimizer_list_prefix_sizes[i]);
     }
 
     size_t mm_ct = minimizer_list.size();
@@ -376,15 +496,15 @@ void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
     for (size_t i = 0; i < mm_ct; i++)
       insertion_list[i] = true;
     // Loop to enforce deterministic order
-    while (! minimizer_list.empty()) {
-      // Gather insertion point information for all remaining minimizers
-      #pragma omp parallel for
+    while (!minimizer_list.empty()) {
+// Gather insertion point information for all remaining minimizers
+#pragma omp parallel for
       for (size_t i = 0; i < mm_ct; i++) {
         // once we've determined that a minimizer won't be an insertion,
         // don't bother calling FindIndex() again
         if (insertion_list[i]) {
           size_t idx;
-          insertion_list[i] = ! hash.FindIndex(minimizer_list[i], &idx);
+          insertion_list[i] = !hash.FindIndex(minimizer_list[i], &idx);
           index_list[i] = idx;
         }
       }
@@ -400,19 +520,21 @@ void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
         }
       }
 
-      // Adjust CHT values for all keys in the safe zone in parallel
-      #pragma omp parallel for
+// Adjust CHT values for all keys in the safe zone in parallel
+#pragma omp parallel for
       for (size_t i = 0; i < safe_ct; i++) {
         SetMinimizerLCA(hash, minimizer_list[i], taxid, tax);
       }
 
       // Remove safe prefix and re-iterate to process remainder
-      minimizer_list.erase(minimizer_list.begin(), minimizer_list.begin() + safe_ct);
+      minimizer_list.erase(minimizer_list.begin(),
+                           minimizer_list.begin() + safe_ct);
       index_list.erase(index_list.begin(), index_list.begin() + safe_ct);
-      insertion_list.erase(insertion_list.begin(), insertion_list.begin() + safe_ct);
+      insertion_list.erase(insertion_list.begin(),
+                           insertion_list.begin() + safe_ct);
       mm_ct -= safe_ct;
-    }  // end deterministic order while loop
-  }  // end block for loop
+    } // end deterministic order while loop
+  }   // end block for loop
 
   for (int i = 0; i < set_ct; i++)
     omp_destroy_lock(&locks[i]);
@@ -420,7 +542,7 @@ void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
 
 void ReadIDToTaxonMap(map<string, taxid_t> &id_map, string &filename) {
   ifstream map_file(filename.c_str());
-  if (! map_file.good())
+  if (!map_file.good())
     err(EX_NOINPUT, "unable to read from '%s'", filename.c_str());
   string line;
 
@@ -436,10 +558,8 @@ void ReadIDToTaxonMap(map<string, taxid_t> &id_map, string &filename) {
 }
 
 void GenerateTaxonomy(Options &opts, map<string, taxid_t> &id_map) {
-  NCBITaxonomy ncbi_taxonomy(
-    opts.ncbi_taxonomy_directory + "/nodes.dmp",
-    opts.ncbi_taxonomy_directory + "/names.dmp"
-  );
+  NCBITaxonomy ncbi_taxonomy(opts.ncbi_taxonomy_directory + "/nodes.dmp",
+                             opts.ncbi_taxonomy_directory + "/names.dmp");
   for (auto &kv_pair : id_map) {
     if (kv_pair.second != 0) {
       ncbi_taxonomy.MarkNode(kv_pair.second);
@@ -452,103 +572,105 @@ void ParseCommandLine(int argc, char **argv, Options &opts) {
   int opt;
   long long sig;
 
-  while ((opt = getopt(argc, argv, "?hB:b:c:FH:m:n:o:t:k:l:M:p:r:s:S:T:X")) != -1) {
+  while ((opt = getopt(argc, argv, "?hB:b:c:FH:m:n:o:t:k:l:M:p:r:s:S:T:X")) !=
+         -1) {
     switch (opt) {
-      case 'h' : case '?' :
-        usage(0);
-        break;
-      case 'B' :
-        sig = atoll(optarg);
-        if (sig < 1)
-          errx(EX_USAGE, "must have positive block size");
-        opts.block_size = sig;
-        break;
-      case 'b' :
-        sig = atoll(optarg);
-        if (sig < 1)
-          errx(EX_USAGE, "must have positive subblock size");
-        opts.subblock_size = sig;
-        break;
-      case 'r' :
-        sig = atoll(optarg);
-        if (sig < 0)
-          errx(EX_USAGE, "can't have negative bit storage");
-        if (sig > 31)
-          errx(EX_USAGE, "can't have more than 31 bits of storage for taxid");
-        opts.requested_bits_for_taxid = sig;
-        break;
-      case 'p' :
-        opts.num_threads = atoll(optarg);
-        if (opts.num_threads < 1)
-          errx(EX_USAGE, "can't have negative number of threads");
-        if (opts.num_threads > omp_get_max_threads())
-          errx(EX_USAGE, "OMP only wants you to use %d threads", omp_get_max_threads());
-        break;
-      case 'H' :
-        opts.hashtable_filename = optarg;
-        break;
-      case 'm' :
-        opts.ID_to_taxon_map_filename = optarg;
-        break;
-      case 'n' :
-        opts.ncbi_taxonomy_directory = optarg;
-        break;
-      case 'o' :
-        opts.options_filename = optarg;
-        break;
-      case 't' :
-        opts.taxonomy_filename = optarg;
-        break;
-      case 'S' :
-        opts.spaced_seed_mask = strtol(optarg, nullptr, 2);
-        break;
-      case 'T' :
-        opts.toggle_mask = strtol(optarg, nullptr, 2);
-        break;
-      case 'k' :
-        sig = atoll(optarg);
-        if (sig < 1)
-          errx(EX_USAGE, "k must be positive integer");
-        opts.k = sig;
-        break;
-      case 'l' :
-        sig = atoll(optarg);
-        if (sig < 1)
-          errx(EX_USAGE, "l must be positive integer");
-        if (sig > 31)
-          errx(EX_USAGE, "l must be no more than 31");
-        opts.l = sig;
-        break;
-      case 'c' :
-        sig = atoll(optarg);
-        if (sig < 1)
-          errx(EX_USAGE, "capacity must be positive integer");
-        opts.capacity = sig;
-        break;
-      case 'M' :
-        sig = atoll(optarg);
-        if (sig < 1)
-          errx(EX_USAGE, "max capacity must be positive integer");
-        opts.maximum_capacity = sig;
-        break;
-      case 'F' :
-        opts.deterministic_build = false;
-        break;
-      case 'X' :
-        opts.input_is_protein = true;
-        break;
+    case 'h':
+    case '?':
+      usage(0);
+      break;
+    case 'B':
+      sig = atoll(optarg);
+      if (sig < 1)
+        errx(EX_USAGE, "must have positive block size");
+      opts.block_size = sig;
+      break;
+    case 'b':
+      sig = atoll(optarg);
+      if (sig < 1)
+        errx(EX_USAGE, "must have positive subblock size");
+      opts.subblock_size = sig;
+      break;
+    case 'r':
+      sig = atoll(optarg);
+      if (sig < 0)
+        errx(EX_USAGE, "can't have negative bit storage");
+      if (sig > 31)
+        errx(EX_USAGE, "can't have more than 31 bits of storage for taxid");
+      opts.requested_bits_for_taxid = sig;
+      break;
+    case 'p':
+      opts.num_threads = atoll(optarg);
+      if (opts.num_threads < 1)
+        errx(EX_USAGE, "can't have negative number of threads");
+      if (opts.num_threads > omp_get_max_threads())
+        errx(EX_USAGE, "OMP only wants you to use %d threads",
+             omp_get_max_threads());
+      break;
+    case 'H':
+      opts.hashtable_filename = optarg;
+      break;
+    case 'm':
+      opts.ID_to_taxon_map_filename = optarg;
+      break;
+    case 'n':
+      opts.ncbi_taxonomy_directory = optarg;
+      break;
+    case 'o':
+      opts.options_filename = optarg;
+      break;
+    case 't':
+      opts.taxonomy_filename = optarg;
+      break;
+    case 'S':
+      opts.spaced_seed_mask = strtol(optarg, nullptr, 2);
+      break;
+    case 'T':
+      opts.toggle_mask = strtol(optarg, nullptr, 2);
+      break;
+    case 'k':
+      sig = atoll(optarg);
+      if (sig < 1)
+        errx(EX_USAGE, "k must be positive integer");
+      opts.k = sig;
+      break;
+    case 'l':
+      sig = atoll(optarg);
+      if (sig < 1)
+        errx(EX_USAGE, "l must be positive integer");
+      if (sig > 31)
+        errx(EX_USAGE, "l must be no more than 31");
+      opts.l = sig;
+      break;
+    case 'c':
+      sig = atoll(optarg);
+      if (sig < 1)
+        errx(EX_USAGE, "capacity must be positive integer");
+      opts.capacity = sig;
+      break;
+    case 'M':
+      sig = atoll(optarg);
+      if (sig < 1)
+        errx(EX_USAGE, "max capacity must be positive integer");
+      opts.maximum_capacity = sig;
+      break;
+    case 'F':
+      opts.deterministic_build = false;
+      break;
+    case 'X':
+      opts.input_is_protein = true;
+      break;
     }
   }
 
   if (opts.spaced_seed_mask != DEFAULT_SPACED_SEED_MASK)
-    ExpandSpacedSeedMask(opts.spaced_seed_mask,
-      opts.input_is_protein ? BITS_PER_CHAR_PRO : BITS_PER_CHAR_DNA);
+    ExpandSpacedSeedMask(opts.spaced_seed_mask, opts.input_is_protein
+                                                    ? BITS_PER_CHAR_PRO
+                                                    : BITS_PER_CHAR_DNA);
   if (opts.hashtable_filename.empty() ||
       opts.ID_to_taxon_map_filename.empty() ||
-      opts.ncbi_taxonomy_directory.empty() ||
-      opts.options_filename.empty() ||
-      opts.taxonomy_filename.empty())
-  {
+      opts.ncbi_taxonomy_directory.empty() || opts.options_filename.empty() ||
+      opts.taxonomy_filename.empty()) {
     cerr << "missing mandatory filename parameter" << endl;
     usage();
   }
@@ -565,7 +687,9 @@ void ParseCommandLine(int argc, char **argv, Options &opts) {
     usage();
   }
   if (opts.maximum_capacity > opts.capacity) {
-    cerr << "maximum capacity option shouldn't specify larger capacity than normal" << endl;
+    cerr << "maximum capacity option shouldn't specify larger capacity than "
+            "normal"
+         << endl;
     usage();
   }
 }

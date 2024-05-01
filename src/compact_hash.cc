@@ -12,6 +12,12 @@ using std::unordered_map;
 
 namespace kraken2 {
 
+inline hkey_t computeCompactedKey(hkey_t key, size_t value_bits)
+{
+  uint64_t hc = MurmurHash3(key);
+  return hc >> (32 + value_bits);
+}
+
 CompactHashTable::CompactHashTable(size_t capacity, size_t key_bits, size_t value_bits)
     : capacity_(capacity), size_(0), key_bits_(key_bits), value_bits_(value_bits),
       file_backed_(false), locks_initialized_(true)

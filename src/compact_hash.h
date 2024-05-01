@@ -7,34 +7,40 @@
 #ifndef KRAKEN2_COMPACT_HASH_H_
 #define KRAKEN2_COMPACT_HASH_H_
 
+#include "kraken2_data.h"
+#include "kraken2_headers.h"
 #include "kv_store.h"
 #include "mmap_file.h"
-#include "kraken2_headers.h"
-#include "kraken2_data.h"
 
 namespace kraken2 {
 
+inline uint32_t computeCompactHash(hkey_t compacted_key, hvalue_t val, size_t value_bits) {
+  uint32_t data = compacted_key << value_bits;
+  data |= val;
+  return data;
+}
+
 struct CompactHashCell {
   inline hkey_t hashed_key(size_t value_bits) {
-    return (hkey_t) (data >> value_bits);
+    return (hkey_t)(data >> value_bits);
   }
 
   inline hvalue_t value(size_t value_bits) {
-    return (hvalue_t) (data & ((1 << value_bits) - 1));
+    return (hvalue_t)(data & ((1 << value_bits) - 1));
   }
 
-  void populate(hkey_t compacted_key, hvalue_t val, size_t key_bits, size_t value_bits) {
+  void populate(hkey_t compacted_key, hvalue_t val, size_t key_bits,
+                size_t value_bits) {
     if (key_bits + value_bits != 32)
       errx(EX_SOFTWARE, "key len of %u and value len of %u don't sum to 32",
-           (unsigned int) key_bits, (unsigned int) value_bits);
-    if (! key_bits || ! value_bits)
+           (unsigned int)key_bits, (unsigned int)value_bits);
+    if (!key_bits || !value_bits)
       errx(EX_SOFTWARE, "key len and value len must be nonzero");
     uint64_t max_value = (1llu << value_bits) - 1;
     if (max_value < val)
       errx(EX_SOFTWARE, "value len of %u too small for value of %llu",
-           (unsigned int) value_bits, (unsigned long long int) val);
-    data = compacted_key << value_bits;
-    data |= val;
+           (unsigned int)value_bits, (unsigned long long int)val);
+    data = computeCompactHash(compacted_key, val, value_bits);
   }
 
   // value in the low bits
@@ -64,10 +70,10 @@ struct CompactHashCell {
  **/
 
 class CompactHashTable : public KeyValueStore {
-  public:
+public:
   CompactHashTable(size_t capacity, size_t key_bits, size_t value_bits);
-  CompactHashTable(const std::string &filename, bool memory_mapping=false);
-  CompactHashTable(const char *filename, bool memory_mapping=false);
+  CompactHashTable(const std::string &filename, bool memory_mapping = false);
+  CompactHashTable(const char *filename, bool memory_mapping = false);
   ~CompactHashTable();
 
   hvalue_t Get(hkey_t key) const;
@@ -81,7 +87,8 @@ class CompactHashTable : public KeyValueStore {
   //   *old_value = CHT[key]
   //   return false
   bool CompareAndSet(hkey_t key, hvalue_t new_value, hvalue_t *old_value);
-  bool DirectCompareAndSet(size_t idx, hkey_t key, hvalue_t new_value, hvalue_t *old_value);
+  bool DirectCompareAndSet(size_t idx, hkey_t key, hvalue_t new_value,
+                           hvalue_t *old_value);
   void WriteTable(const char *filename);
 
   taxon_counts_t GetValueCounts() const;
@@ -92,11 +99,11 @@ class CompactHashTable : public KeyValueStore {
   size_t value_bits() const { return value_bits_; }
   double occupancy() const { return size_ * 1.0 / capacity_; }
 
-  private:
+private:
   static const size_t LOCK_ZONES = 256;
   size_t capacity_;
   size_t size_;
-  //size_t index_mask_;
+  // size_t index_mask_;
   size_t key_bits_;
   size_t value_bits_;
   CompactHashCell *table_;
@@ -106,12 +113,12 @@ class CompactHashTable : public KeyValueStore {
   omp_lock_t zone_locks_[LOCK_ZONES];
 
   CompactHashTable(const CompactHashTable &rhs);
-  CompactHashTable& operator=(const CompactHashTable &rhs);
+  CompactHashTable &operator=(const CompactHashTable &rhs);
 
   void LoadTable(const char *filename, bool memory_mapping);
   uint64_t second_hash(uint64_t first_hash) const;
 };
 
-}  // end namespace
+} // namespace kraken2
 
 #endif

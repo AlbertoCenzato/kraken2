@@ -13,6 +13,8 @@
 #include "kraken2_data.h"
 #include "utilities.h"
 
+#include <algorithm>
+
 using std::string;
 using std::map;
 using std::cout;
@@ -51,12 +53,6 @@ struct Options {
   string input_filename;
 };
 
-#pragma pack(4)
-struct IdxValue {
-  size_t idx;
-  uint32_t value;
-};
-
 void ParseCommandLine(int argc, char **argv, Options &opts);
 void usage(int exit_code = EX_USAGE);
 vector<string> ExtractNCBISequenceIDs(const string &header);
@@ -66,16 +62,17 @@ void ProcessSequenceFast(const string &seq, taxid_t taxid,
                          uint64_t min_clear_hash_value);
 void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
                      CompactHashTable &hash, const Taxonomy &tax);
-std::vector<IdxValue> ProcessSequence2(const Options &opts, const string &seq,
+std::vector<uint64_t> ProcessSequence2(const Options &opts, const string &seq,
                                        taxid_t taxid, const Taxonomy &tax, size_t value_bits, 
                                        size_t capacity);
 void ProcessSequencesFast(const Options &opts,
                           const map<string, taxid_t> &ID_to_taxon_map,
                           CompactHashTable &kraken_index,
                           const Taxonomy &taxonomy);
-void ProcessSequences(std::istream &input_stream, const Options &opts,
-                      const map<string, taxid_t> &ID_to_taxon_map,
-                      const string &output_hash_file, const Taxonomy &taxonomy, size_t value_bits, size_t capacity);
+void ProcessSequences(const Options &opts,
+    const map<string, taxid_t> &ID_to_taxon_map,
+    CompactHashTable &kraken_index, const Taxonomy &taxonomy, 
+    std::istream &input_stream, size_t value_bits, size_t capacity);
 void SetMinimizerLCA(CompactHashTable &hash, uint64_t minimizer, taxid_t taxid,
                      const Taxonomy &tax);
 void ReadIDToTaxonMap(map<string, taxid_t> &id_map, string &filename);
@@ -138,18 +135,17 @@ int main(int argc, char **argv) {
   std::cerr << "CHT created with " << bits_for_taxid
             << " bits reserved for taxid." << std::endl;
 
-  std::string output_hash_file = "/workspaces/kraken2/db/test/hashes.bin";
   if (opts.deterministic_build) {
     if (opts.input_filename.empty()) {
-      ProcessSequences(std::cin, opts, ID_to_taxon_map, output_hash_file,
-                       taxonomy, bits_for_taxid, actual_capacity);
+      ProcessSequences(opts, ID_to_taxon_map, kraken_index,
+                       taxonomy, std::cin, bits_for_taxid, actual_capacity);
     } else {
       ifstream input_file(opts.input_filename);
       if (!input_file.good())
         err(EX_NOINPUT, "unable to read from '%s'",
             opts.input_filename.c_str());
-      ProcessSequences(input_file, opts, ID_to_taxon_map, output_hash_file,
-                       taxonomy, bits_for_taxid, actual_capacity);
+      ProcessSequences(opts, ID_to_taxon_map, kraken_index,
+                       taxonomy, input_file, bits_for_taxid, actual_capacity);
     }
   } else
     ProcessSequencesFast(opts, ID_to_taxon_map, kraken_index, taxonomy);
@@ -240,11 +236,17 @@ void ProcessSequencesFast(const Options &opts,
             << std::endl;
 }
 
+bool FileExists(const std::string &filename) {
+  struct stat buffer;
+  return (stat(filename.c_str(), &buffer) == 0);
+}
+
 // Slightly slower but deterministic when multithreaded
-void ProcessSequences(std::istream &input_stream, const Options &opts,
-                      const map<string, taxid_t> &ID_to_taxon_map,
-                      const string &base_hash_filename,
-                      const Taxonomy &taxonomy, size_t value_bits, size_t capacity) {
+void ProcessSequences(const Options &opts,
+    const map<string, taxid_t> &ID_to_taxon_map,
+    CompactHashTable &kraken_index, const Taxonomy &taxonomy, 
+    std::istream &input_stream, size_t value_bits, size_t capacity) 
+{
   auto start = std::chrono::steady_clock::now();
   size_t processed_seq_ct = 0;
   size_t processed_ch_ct = 0;
@@ -252,8 +254,8 @@ void ProcessSequences(std::istream &input_stream, const Options &opts,
   Sequence sequence;
   BatchSequenceReader reader;
 
+  string output_hash_dir = "/workspaces/kraken2/db/test/hashes";
 
-  auto output_file = std::ofstream(base_hash_filename, std::ios::binary);
   while (reader.LoadBlock(input_stream, DEFAULT_BLOCK_SIZE)) {
     while (reader.NextSequence(sequence)) {
       auto all_sequence_ids = ExtractNCBISequenceIDs(sequence.header);
@@ -269,10 +271,25 @@ void ProcessSequences(std::istream &input_stream, const Options &opts,
         // Add terminator for protein sequences if not already there
         if (opts.input_is_protein && sequence.seq.back() != '*')
           sequence.seq.push_back('*');
-        const auto hashes = ProcessSequence2(opts, sequence.seq, taxid, taxonomy, value_bits, capacity);
-        output_file.write(reinterpret_cast<const char *>(hashes.data()),
-                          hashes.size() * sizeof(IdxValue));
+        auto hashes = ProcessSequence2(opts, sequence.seq, taxid, taxonomy, value_bits, capacity);
+        
+        std::sort(hashes.begin(), hashes.end(), [capacity](uint64_t h1, uint64_t h2) {
+          return (h1 % capacity) < (h2 % capacity);
+        });
 
+        uint64_t index = 0;
+        auto output_path = output_hash_dir + "/" + std::to_string(taxid) + "_" + std::to_string(index) + ".bin";
+        while (FileExists(output_path)) {
+          index++;
+          output_path = output_hash_dir + "/" + std::to_string(taxid) + "_" + std::to_string(index) + ".bin";
+        }
+
+
+        auto output_file = std::ofstream(output_path, std::ios::binary);
+        output_file.write(reinterpret_cast<const char *>(hashes.data()),
+                          hashes.size() * sizeof(uint64_t));
+
+        // ProcessSequence(opts, sequence.seq, taxid, kraken_index, taxonomy);
         processed_seq_ct++;
         processed_ch_ct += sequence.seq.size();
       }
@@ -355,21 +372,22 @@ void ProcessSequenceFast(const string &seq, taxid_t taxid,
   }
 }
 
-IdxValue getIdxValue(hkey_t key, hvalue_t val, size_t value_bits, size_t capacity) {
+/* IdxValue getIdxValue(hkey_t key, hvalue_t val, size_t value_bits, size_t capacity) {
   uint64_t hc = MurmurHash3(key);
-  hkey_t compacted_key = hc >> (32 + value_bits);
-
   size_t idx = hc % capacity;
+
+  hkey_t compacted_key = hc >> (32 + value_bits);
   uint32_t value = computeCompactHash(compacted_key, val, value_bits);
   return IdxValue{.idx = idx, .value = value};
 }
+ */
 
-std::vector<IdxValue> ProcessSequence2(const Options &opts, const string &seq,
+std::vector<uint64_t> ProcessSequence2(const Options &opts, const string &seq,
                                taxid_t taxid, const Taxonomy &tax, size_t value_bits, 
                                size_t capacity) {
   const int set_ct = 256;
   // for each block in the sequence
-  auto hashes = std::vector<IdxValue>{};
+  auto hashes = std::vector<uint64_t>{};
   for (size_t j = 0; j < seq.size(); j += opts.block_size) {
     // block: fixed length subsequence of DNA/protein, handled in series,
     //   consecutive blocks overlap by k-1 characters
@@ -421,8 +439,8 @@ std::vector<IdxValue> ProcessSequence2(const Options &opts, const string &seq,
     }
 
     for (auto minimizer : minimizer_list) {
-      const auto idx_value = getIdxValue(minimizer, taxid, value_bits, capacity);
-      hashes.push_back(idx_value);
+      uint64_t hash = MurmurHash3(minimizer);
+      hashes.push_back(hash);
     }
   }   // end block for loop
   return hashes;

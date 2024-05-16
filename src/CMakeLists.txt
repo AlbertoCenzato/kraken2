@@ -47,4 +47,7 @@ add_executable(k2mask
         k2mask.cc
         seqreader.cc)
 
+add_executable(merge_sort_files
+        merge_sort_files.cc)
+
 target_link_libraries(k2mask ${ZLIB_LIBRARIES})

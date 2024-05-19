@@ -4,50 +4,136 @@
 #include <algorithm>
 #include <utility>
 #include <chrono>
+#include <filesystem>
+#include <thread>
 
-bool lessThan(uint64_t a, uint64_t b) {
-	return a < b;
+#include "merge_sort_files.h"
+
+namespace fs = std::filesystem;
+
+// order by idx and then by value
+bool operator<(const IdxValue &lhs, const IdxValue &rhs) {
+  return lhs.idx < rhs.idx || (lhs.idx == rhs.idx && lhs.value < rhs.value);
 }
 
-void mergeSortStreams(std::vector<std::ifstream>& input_streams, std::ostream& output_stream)
+bool operator==(const IdxValue &lhs, const IdxValue &rhs) {
+	return lhs.idx == rhs.idx && lhs.value == rhs.value;
+}
+
+struct Data {
+	std::ifstream file_stream;
+	IdxValue value;
+	bool eof;
+	bool read_mask;
+};
+
+void mergeSortStreams(std::vector<fs::path>& input_files, std::ostream& output_stream)
 {
 	auto start = std::chrono::high_resolution_clock::now();
-	size_t total_written_bytes = 0;
-	std::vector<uint64_t> values(input_streams.size());
-	std::vector<bool> eof(input_streams.size(), false);
-	std::vector<bool> read_mask(input_streams.size(), true);
-	while (!std::all_of(eof.begin(), eof.end(), [](bool x) { return x; })) {
+	
+	size_t total_processed_bytes = 0;
+	std::vector<Data> data;
+	for (const auto& path : input_files) {
+		data.push_back(Data{
+			.file_stream = std::ifstream{path, std::ios::binary}, 
+			.value={}, 
+			.eof=false, 
+			.read_mask=true
+		});
+	}
+
+	auto last_value_written = IdxValue{ 0, 0 };
+	while (!std::all_of(data.begin(), data.end(), [](const auto& x) { return x.eof; })) {
 		// read values from all files
-		for (size_t i = 0; i < input_streams.size(); i++) {
-			if (read_mask[i] && !eof[i]) {
-				eof[i] = !input_streams[i].read(reinterpret_cast<char *>(&values[i]), sizeof(uint64_t));
-				read_mask[i] = false;
+		for (size_t i = 0; i < data.size(); i++) {
+			auto &d = data[i];
+			if (d.read_mask && !d.eof) {
+				d.file_stream.read(reinterpret_cast<char *>(&d.value), sizeof(IdxValue));
+				d.read_mask = false;
+				d.eof = d.file_stream.eof();
 			}
 		}
 
 		// find the smallest value
-		const auto first_not_eof = std::find(eof.begin(), eof.end(), false);
-		if (first_not_eof == eof.end()) {
+		const auto first_not_eof = std::find_if(data.begin(), data.end(), [](const auto& x) { return !x.eof; });
+		if (first_not_eof == data.end()) {
 			break;
 		}
 
-		size_t min_index = std::distance(eof.begin(), first_not_eof);
-		for (size_t i = min_index + 1; i < input_streams.size(); i++) {
-			if (!eof[i] && lessThan(values[i], values[min_index])) {
-				min_index = i;
+		auto min_iter = first_not_eof;
+		for (auto iter = first_not_eof + 1; iter != data.end(); iter++) {
+			if (!iter->eof && iter->value < min_iter->value) {
+				min_iter = iter;
 			}
 		}
 		
-		read_mask[min_index] = true;
-		const auto min_value = values[min_index];
+		min_iter->read_mask = true;
+		const auto min_value = min_iter->value;
+
+		total_processed_bytes += sizeof(IdxValue);
+		if (min_value == last_value_written) {
+			continue;
+		}
 
 		// write the smallest value to the output file
-		output_stream.write(reinterpret_cast<const char *>(&min_value), sizeof(uint64_t));
-		total_written_bytes += sizeof(uint64_t);
+		output_stream.write(reinterpret_cast<const char *>(&min_value), sizeof(IdxValue));
+
+		last_value_written = min_value;
 	}
 	auto end = std::chrono::high_resolution_clock::now();
 	std::cout << "Time to merge files: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms" << std::endl;
-	std::cout << "Write speed: " << (total_written_bytes / 1024 / 1024) / (std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0) << "MB/s" << std::endl;
+	std::cout << "Processing speed: " << (total_processed_bytes / 1024.0 / 1024.0) / (std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0) << "MB/s" << std::endl;
+}
+
+void multiStepMerge(const fs::path& hash_dir, const fs::path& merge_dir, const fs::path& output_file)
+{
+	auto start_merge = std::chrono::steady_clock::now();
+	auto src_dir = hash_dir;
+  fs::directory_iterator it(src_dir);
+  auto file_paths = std::vector<fs::directory_entry>{it, fs::directory_iterator{}};
+	size_t iteration = 0;
+	while (file_paths.size() > 1) {
+		std::cout << "Iteration " << iteration << "; files: " << file_paths.size() << std::endl;
+		auto dst_dir = merge_dir / ("iteration_" + std::to_string(iteration));
+		fs::create_directories(dst_dir);
+
+  	constexpr size_t batch_size = 64;
+  	for (size_t i = 0; i < file_paths.size(); i += batch_size) {
+			std::cout << "Merged files " << i << std::endl;
+  	  size_t files_in_batch = std::min(batch_size, file_paths.size() - i);
+  	  auto batch_file_paths = std::vector<fs::path>();
+  	  for (size_t j = 0; j < files_in_batch; j++) {
+				batch_file_paths.push_back(file_paths[i + j].path());
+			}
+
+  	  auto output_path = dst_dir / ("merged_" + std::to_string(i / batch_size) + ".bin");
+  	  auto output_stream = std::ofstream(output_path, std::ios::binary);
+  	  mergeSortStreams(batch_file_paths, output_stream);
+  	}
+
+		// remove old files
+		if (iteration > 0) {
+			auto prev_dst_dir = merge_dir / ("iteration_" + std::to_string(iteration - 1));
+			fs::remove_all(prev_dst_dir);
+		}
+		src_dir = std::move(dst_dir);
+	  fs::directory_iterator it(src_dir);
+  	file_paths = std::vector<fs::directory_entry>{it, fs::directory_iterator{}};
+		iteration++;
+	}
+
+	// move the last file to the output file
+	if (file_paths.size() != 1) {
+		std::cerr << "Error: expected 1 file, got " << file_paths.size() << std::endl;
+		return;
+	}
+	fs::rename(file_paths[0].path(), output_file);
+
+  auto end_merge = std::chrono::steady_clock::now();
+  std::cerr << "Merging took "
+            << std::chrono::duration_cast<std::chrono::seconds>(end_merge - start_merge)
+                   .count()
+            << " seconds" << std::endl;  
 }
 
 void measureMaxWriteSpeed() {
@@ -62,6 +148,19 @@ void measureMaxWriteSpeed() {
 	auto end = std::chrono::high_resolution_clock::now();
 	std::cout << "Time to write file: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms" << std::endl;
 	std::cout << "Write speed: " << (total_written_bytes / 1024 / 1024) / (std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0) << "MB/s" << std::endl;
+}
+
+void measureMaxReadSpeed() {
+	std::vector<uint64_t> values = std::vector<uint64_t>(1024*1024);
+	size_t total_read_bytes = 0;
+	auto start = std::chrono::high_resolution_clock::now();
+	std::ifstream input_file("output_file.bin", std::ios::binary);
+	while (input_file.read(reinterpret_cast<char *>(values.data()), sizeof(uint64_t)*values.size())) {
+		total_read_bytes += sizeof(uint64_t)*values.size();
+	}
+	auto end = std::chrono::high_resolution_clock::now();
+	std::cout << "Time to read file: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms" << std::endl;
+	std::cout << "Read speed: " << (total_read_bytes / 1024 / 1024) / (std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0) << "MB/s" << std::endl;
 
 }
 
@@ -88,9 +187,9 @@ std::pair<std::vector<std::ifstream>, std::ofstream> createTestFiles()
 }
 
 
-
+/*
 int main(int argc, char *argv[]) {
-	if (argc < 2) {
+	 if (argc < 2) {
 		std::cerr << "Usage: " << argv[0] << " <input file> <input file> [<input file>...] <output file>" << std::endl;
 		return 1;
 	}
@@ -114,7 +213,14 @@ int main(int argc, char *argv[]) {
 	}
 
 	std::cout << "merging files" << std::endl;
-	mergeSortStreams(files, output_file);
+	mergeSortStreams(files, output_file); 
+
+	fs::path output_hash_dir = "/workspaces/kraken2/db/test/hashes";
+  fs::path output_merge_dir = "/workspaces/kraken2/db/test/merged_hashes";
+	fs::path output_file = "/workspaces/kraken2/db/test/merged_hashes/merged.bin";
+	multiStepMerge(output_hash_dir, output_merge_dir, output_file);
 
 	return 0;
 }
+*/
+

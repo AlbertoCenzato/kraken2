@@ -26,5 +26,5 @@
 		}
 	},
 	// fix line endings when working on windows host 
-	"postAttachCommand": "apt install -y dos2unix && find ${workspaceFolder} -type f -exec dos2unix {} \\; && apt remove -y dos2unix"
+	// "postAttachCommand": "apt install -y dos2unix && find ${workspaceFolder} -type f -exec dos2unix {} \\; && apt remove -y dos2unix"
 }

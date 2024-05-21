@@ -18,5 +18,9 @@ void multiStepMerge(
 	const std::filesystem::path& merge_dir, 
 	const std::filesystem::path& output_file);
 
+void makeHashTable(
+	const std::filesystem::path& merged_hash_file, 
+	const std::filesystem::path& output_file,
+	size_t capacity, size_t key_bits, size_t value_bits);
 
 #endif

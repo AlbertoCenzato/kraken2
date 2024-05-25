@@ -4,34 +4,34 @@
  * This file is part of the Kraken 2 taxonomic sequence classification system.
  */
 
+#include "compact_hash.h"
+#include "kraken2_data.h"
 #include "kraken2_headers.h"
-#include "taxonomy.h"
+#include "kv_store.h"
+#include "merge_sort_files.h"
 #include "mmscanner.h"
 #include "seqreader.h"
-#include "compact_hash.h"
-#include "kv_store.h"
-#include "kraken2_data.h"
+#include "taxonomy.h"
 #include "utilities.h"
-#include "merge_sort_files.h"
 
 #include <algorithm>
 #include <filesystem>
 
-using std::string;
-using std::map;
-using std::cout;
-using std::queue;
 using std::cerr;
+using std::cout;
 using std::endl;
-using std::vector;
-using std::istringstream;
 using std::ifstream;
+using std::istringstream;
+using std::map;
 using std::ofstream;
+using std::queue;
+using std::string;
+using std::vector;
 using namespace kraken2;
 
 // These will likely be overridden by wrapper script,
 // just keeping sane defaults in case they aren't
-#define DEFAULT_BLOCK_SIZE (10 * 1024 * 1024)  // 10 MB
+#define DEFAULT_BLOCK_SIZE (10 * 1024 * 1024) // 10 MB
 #define DEFAULT_SUBBLOCK_SIZE (1024)
 
 struct Options {
@@ -55,7 +55,6 @@ struct Options {
   string input_filename;
 };
 
-
 void ParseCommandLine(int argc, char **argv, Options &opts);
 void usage(int exit_code = EX_USAGE);
 vector<string> ExtractNCBISequenceIDs(const string &header);
@@ -67,17 +66,18 @@ void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
                      CompactHashTable &hash, const Taxonomy &tax);
 
 std::vector<IdxValue> ProcessSequence2(const Options &opts, const string &seq,
-                                       taxid_t taxid, const Taxonomy &tax, size_t value_bits, 
-                                       size_t capacity);
+                                       taxid_t taxid, const Taxonomy &tax,
+                                       size_t value_bits, size_t capacity);
 
 void ProcessSequencesFast(const Options &opts,
                           const map<string, taxid_t> &ID_to_taxon_map,
                           CompactHashTable &kraken_index,
                           const Taxonomy &taxonomy);
 void ProcessSequences(const Options &opts,
-    const map<string, taxid_t> &ID_to_taxon_map,
-    CompactHashTable &kraken_index, const Taxonomy &taxonomy, 
-    std::istream &input_stream, size_t value_bits, size_t capacity);
+                      const map<string, taxid_t> &ID_to_taxon_map,
+                      CompactHashTable &kraken_index, const Taxonomy &taxonomy,
+                      std::istream &input_stream, size_t value_bits,
+                      size_t capacity);
 void SetMinimizerLCA(CompactHashTable &hash, uint64_t minimizer, taxid_t taxid,
                      const Taxonomy &tax);
 void ReadIDToTaxonMap(map<string, taxid_t> &id_map, string &filename);
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
   ReadIDToTaxonMap(ID_to_taxon_map, opts.ID_to_taxon_map_filename);
   GenerateTaxonomy(opts, ID_to_taxon_map);
 
-  std::cerr << "Taxonomy parsed and converted." << std::endl;
+  std::cerr << "Taxonomy parsed and converted2." << std::endl;
 
   Taxonomy taxonomy(opts.taxonomy_filename.c_str());
   taxonomy.GenerateExternalToInternalIDMap();
@@ -142,15 +142,15 @@ int main(int argc, char **argv) {
 
   if (opts.deterministic_build) {
     if (opts.input_filename.empty()) {
-      ProcessSequences(opts, ID_to_taxon_map, kraken_index,
-                       taxonomy, std::cin, bits_for_taxid, actual_capacity);
+      ProcessSequences(opts, ID_to_taxon_map, kraken_index, taxonomy, std::cin,
+                       bits_for_taxid, actual_capacity);
     } else {
       ifstream input_file(opts.input_filename);
       if (!input_file.good())
         err(EX_NOINPUT, "unable to read from '%s'",
             opts.input_filename.c_str());
-      ProcessSequences(opts, ID_to_taxon_map, kraken_index,
-                       taxonomy, input_file, bits_for_taxid, actual_capacity);
+      ProcessSequences(opts, ID_to_taxon_map, kraken_index, taxonomy,
+                       input_file, bits_for_taxid, actual_capacity);
     }
   } else
     ProcessSequencesFast(opts, ID_to_taxon_map, kraken_index, taxonomy);
@@ -248,10 +248,10 @@ bool FileExists(const std::string &filename) {
 
 // Slightly slower but deterministic when multithreaded
 void ProcessSequences(const Options &opts,
-    const map<string, taxid_t> &ID_to_taxon_map,
-    CompactHashTable &kraken_index, const Taxonomy &taxonomy, 
-    std::istream &input_stream, size_t value_bits, size_t capacity) 
-{
+                      const map<string, taxid_t> &ID_to_taxon_map,
+                      CompactHashTable &kraken_index, const Taxonomy &taxonomy,
+                      std::istream &input_stream, size_t value_bits,
+                      size_t capacity) {
   auto start = std::chrono::steady_clock::now();
   size_t processed_seq_ct = 0;
   size_t processed_ch_ct = 0;
@@ -260,13 +260,15 @@ void ProcessSequences(const Options &opts,
   BatchSequenceReader reader;
 
   std::filesystem::path output_hash_dir = "/workspaces/kraken2/db/test/hashes";
-  std::filesystem::path output_merge_dir = "/workspaces/kraken2/db/test/merged_hashes";
+  std::filesystem::path output_merge_dir =
+      "/workspaces/kraken2/db/test/merged_hashes";
 
   std::filesystem::create_directories(output_hash_dir);
   std::filesystem::create_directories(output_merge_dir);
 
   auto start_hashing = std::chrono::steady_clock::now();
   while (reader.LoadBlock(input_stream, DEFAULT_BLOCK_SIZE)) {
+    std::cout << "Doing things..." << std::endl;
     while (reader.NextSequence(sequence)) {
       auto all_sequence_ids = ExtractNCBISequenceIDs(sequence.header);
       taxid_t taxid = 0;
@@ -281,17 +283,19 @@ void ProcessSequences(const Options &opts,
         // Add terminator for protein sequences if not already there
         if (opts.input_is_protein && sequence.seq.back() != '*')
           sequence.seq.push_back('*');
-        auto hashes = ProcessSequence2(opts, sequence.seq, taxid, taxonomy, value_bits, capacity);
-        
+        auto hashes = ProcessSequence2(opts, sequence.seq, taxid, taxonomy,
+                                       value_bits, capacity);
+
         std::sort(hashes.begin(), hashes.end());
 
         uint64_t index = 0;
-        auto output_path = output_hash_dir / (std::to_string(taxid) + "_" + std::to_string(index) + ".bin");
+        auto output_path = output_hash_dir / (std::to_string(taxid) + "_" +
+                                              std::to_string(index) + ".bin");
         while (FileExists(output_path)) {
           index++;
-          output_path = output_hash_dir / (std::to_string(taxid) + "_" + std::to_string(index) + ".bin");
+          output_path = output_hash_dir / (std::to_string(taxid) + "_" +
+                                           std::to_string(index) + ".bin");
         }
-
 
         auto output_file = std::ofstream(output_path, std::ios::binary);
         output_file.write(reinterpret_cast<const char *>(hashes.data()),
@@ -310,29 +314,45 @@ void ProcessSequences(const Options &opts,
   }
   auto end_hashing = std::chrono::steady_clock::now();
   std::cerr << "Hashing took "
-            << std::chrono::duration_cast<std::chrono::seconds>(end_hashing - start_hashing)
+            << std::chrono::duration_cast<std::chrono::seconds>(end_hashing -
+                                                                start_hashing)
                    .count()
             << " seconds" << std::endl;
-  
 
   auto start_merge = std::chrono::steady_clock::now();
-  multiStepMerge(output_hash_dir, output_merge_dir, output_merge_dir / "merge.bin");
+  multiStepMerge(output_hash_dir, output_merge_dir,
+                 output_merge_dir / "merge.bin");
   auto end_merge = std::chrono::steady_clock::now();
   std::cerr << "Merging took "
-            << std::chrono::duration_cast<std::chrono::seconds>(end_merge - start_merge)
+            << std::chrono::duration_cast<std::chrono::seconds>(end_merge -
+                                                                start_merge)
                    .count()
-            << " seconds" << std::endl;  
-  
+            << " seconds" << std::endl;
+
+  std::cout << "Value bits: " << value_bits << std::endl;
+  std::cout << "Capacity: " << capacity << std::endl;
+
+  auto start_hash_table = std::chrono::steady_clock::now();
+  makeHashTable(output_merge_dir / "merge.bin",
+                output_merge_dir / "hash_table.bin", capacity, 32 - value_bits,
+                value_bits);
+  auto end_hash_table = std::chrono::steady_clock::now();
+  std::cerr << "Hash table creation took "
+            << std::chrono::duration_cast<std::chrono::seconds>(
+                   end_hash_table - start_hash_table)
+                   .count()
+            << " seconds" << std::endl;
+
   if (isatty(fileno(stderr)))
     std::cerr << "\r";
   std::cerr << "Completed processing of " << processed_seq_ct << " sequences, "
             << processed_ch_ct << " " << (opts.input_is_protein ? "aa" : "bp")
             << std::endl;
   auto end = std::chrono::steady_clock::now();
-  std::cerr << "Processing took "
-            << std::chrono::duration_cast<std::chrono::seconds>(end - start)
-                   .count()
-            << " seconds" << std::endl;
+  std::cerr
+      << "Processing took "
+      << std::chrono::duration_cast<std::chrono::seconds>(end - start).count()
+      << " seconds" << std::endl;
 }
 
 // This function exists to deal with NCBI's use of \x01 characters to denote
@@ -395,7 +415,8 @@ void ProcessSequenceFast(const string &seq, taxid_t taxid,
   }
 }
 
-IdxValue getIdxValue(hkey_t key, hvalue_t val, size_t value_bits, size_t capacity) {
+IdxValue getIdxValue(hkey_t key, hvalue_t val, size_t value_bits,
+                     size_t capacity) {
   uint64_t hc = MurmurHash3(key);
   size_t idx = hc % capacity;
 
@@ -405,8 +426,8 @@ IdxValue getIdxValue(hkey_t key, hvalue_t val, size_t value_bits, size_t capacit
 }
 
 std::vector<IdxValue> ProcessSequence2(const Options &opts, const string &seq,
-                               taxid_t taxid, const Taxonomy &tax, size_t value_bits, 
-                               size_t capacity) {
+                                       taxid_t taxid, const Taxonomy &tax,
+                                       size_t value_bits, size_t capacity) {
   const int set_ct = 256;
   // for each block in the sequence
   auto hashes = std::vector<IdxValue>{};
@@ -464,51 +485,62 @@ std::vector<IdxValue> ProcessSequence2(const Options &opts, const string &seq,
       auto idx_val = getIdxValue(minimizer, taxid, value_bits, capacity);
       hashes.push_back(idx_val);
     }
-  }   // end block for loop
+  } // end block for loop
   return hashes;
 }
 
-void mergeSortStreams(std::vector<std::ifstream>& input_streams, std::ostream& output_stream)
-{
-	auto start = std::chrono::high_resolution_clock::now();
-	size_t total_written_bytes = 0;
-	std::vector<IdxValue> values(input_streams.size());
-	std::vector<bool> eof(input_streams.size(), false);
-	std::vector<bool> read_mask(input_streams.size(), true);
-	while (!std::all_of(eof.begin(), eof.end(), [](bool x) { return x; })) {
-		// read values from all files
-		for (size_t i = 0; i < input_streams.size(); i++) {
-			if (read_mask[i] && !eof[i]) {
-				eof[i] = !input_streams[i].read(reinterpret_cast<char *>(&values[i]), sizeof(IdxValue));
-				read_mask[i] = false;
-			}
-		}
+void mergeSortStreams(std::vector<std::ifstream> &input_streams,
+                      std::ostream &output_stream) {
+  auto start = std::chrono::high_resolution_clock::now();
+  size_t total_written_bytes = 0;
+  std::vector<IdxValue> values(input_streams.size());
+  std::vector<bool> eof(input_streams.size(), false);
+  std::vector<bool> read_mask(input_streams.size(), true);
+  while (!std::all_of(eof.begin(), eof.end(), [](bool x) { return x; })) {
+    // read values from all files
+    for (size_t i = 0; i < input_streams.size(); i++) {
+      if (read_mask[i] && !eof[i]) {
+        eof[i] = !input_streams[i].read(reinterpret_cast<char *>(&values[i]),
+                                        sizeof(IdxValue));
+        read_mask[i] = false;
+      }
+    }
 
-		// find the smallest value
-		const auto first_not_eof = std::find(eof.begin(), eof.end(), false);
-		if (first_not_eof == eof.end()) {
-			break;
-		}
+    // find the smallest value
+    const auto first_not_eof = std::find(eof.begin(), eof.end(), false);
+    if (first_not_eof == eof.end()) {
+      break;
+    }
 
-		size_t min_index = std::distance(eof.begin(), first_not_eof);
-		for (size_t i = min_index + 1; i < input_streams.size(); i++) {
-			if (!eof[i] && values[i] < values[min_index]) {
-				min_index = i;
-			}
-		}
-		
-		read_mask[min_index] = true;
-		const auto min_value = values[min_index];
+    size_t min_index = std::distance(eof.begin(), first_not_eof);
+    for (size_t i = min_index + 1; i < input_streams.size(); i++) {
+      if (!eof[i] && values[i] < values[min_index]) {
+        min_index = i;
+      }
+    }
 
-		// write the smallest value to the output file
-		output_stream.write(reinterpret_cast<const char *>(&min_value), sizeof(IdxValue));
-		total_written_bytes += sizeof(IdxValue);
-	}
-	auto end = std::chrono::high_resolution_clock::now();
-	std::cout << "Time to merge files: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms" << std::endl;
-	std::cout << "Write speed: " << (total_written_bytes / 1024 / 1024) / (std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0) << "MB/s" << std::endl;
+    read_mask[min_index] = true;
+    const auto min_value = values[min_index];
+
+    // write the smallest value to the output file
+    output_stream.write(reinterpret_cast<const char *>(&min_value),
+                        sizeof(IdxValue));
+    total_written_bytes += sizeof(IdxValue);
+  }
+  auto end = std::chrono::high_resolution_clock::now();
+  std::cout << "Time to merge files: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end -
+                                                                     start)
+                   .count()
+            << "ms" << std::endl;
+  std::cout << "Write speed: "
+            << (total_written_bytes / 1024 / 1024) /
+                   (std::chrono::duration_cast<std::chrono::milliseconds>(end -
+                                                                          start)
+                        .count() /
+                    1000.0)
+            << "MB/s" << std::endl;
 }
-
 
 void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
                      CompactHashTable &hash, const Taxonomy &tax) {
@@ -616,7 +648,7 @@ void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
                            insertion_list.begin() + safe_ct);
       mm_ct -= safe_ct;
     } // end deterministic order while loop
-  }   // end block for loop
+  } // end block for loop
 
   for (int i = 0; i < set_ct; i++)
     omp_destroy_lock(&locks[i]);

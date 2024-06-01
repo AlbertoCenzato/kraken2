@@ -52,4 +52,7 @@ add_executable(test
         merge_sort_files.cc
         test.cc)
 
+add_executable(disk_speed
+        utils/disk_speed.cc)
+
 target_link_libraries(k2mask ${ZLIB_LIBRARIES})

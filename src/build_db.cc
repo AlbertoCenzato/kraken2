@@ -482,48 +482,6 @@ std::vector<IdxValue> ProcessSequence2(const Options &opts, const string &seq,
   return hashes;
 }
 
-void mergeSortStreams(std::vector<std::ifstream>& input_streams, std::ostream& output_stream)
-{
-	auto start = std::chrono::high_resolution_clock::now();
-	size_t total_written_bytes = 0;
-	std::vector<IdxValue> values(input_streams.size());
-	std::vector<bool> eof(input_streams.size(), false);
-	std::vector<bool> read_mask(input_streams.size(), true);
-	while (!std::all_of(eof.begin(), eof.end(), [](bool x) { return x; })) {
-		// read values from all files
-		for (size_t i = 0; i < input_streams.size(); i++) {
-			if (read_mask[i] && !eof[i]) {
-				eof[i] = !input_streams[i].read(reinterpret_cast<char *>(&values[i]), sizeof(IdxValue));
-				read_mask[i] = false;
-			}
-		}
-
-		// find the smallest value
-		const auto first_not_eof = std::find(eof.begin(), eof.end(), false);
-		if (first_not_eof == eof.end()) {
-			break;
-		}
-
-		size_t min_index = std::distance(eof.begin(), first_not_eof);
-		for (size_t i = min_index + 1; i < input_streams.size(); i++) {
-			if (!eof[i] && values[i] < values[min_index]) {
-				min_index = i;
-			}
-		}
-		
-		read_mask[min_index] = true;
-		const auto min_value = values[min_index];
-
-		// write the smallest value to the output file
-		output_stream.write(reinterpret_cast<const char *>(&min_value), sizeof(IdxValue));
-		total_written_bytes += sizeof(IdxValue);
-	}
-	auto end = std::chrono::high_resolution_clock::now();
-	std::cout << "Time to merge files: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms" << std::endl;
-	std::cout << "Write speed: " << (total_written_bytes / 1024 / 1024) / (std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0) << "MB/s" << std::endl;
-}
-
-
 void ProcessSequence(const Options &opts, const string &seq, taxid_t taxid,
                      CompactHashTable &hash, const Taxonomy &tax) {
   const int set_ct = 256;

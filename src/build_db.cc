@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
   opts.maximum_capacity = 0;
   opts.deterministic_build = true;
   opts.input_filename =
-      "/workspaces/kraken2/db/test/library/archaea/library.fna";
+      "/mnt/data/acenzato/kraken2/db/test/library/archaea/library.fna";
   ParseCommandLine(argc, argv, opts);
 
   omp_set_num_threads(opts.num_threads);
@@ -259,8 +259,8 @@ void ProcessSequences(const Options &opts,
   Sequence sequence;
   BatchSequenceReader reader;
 
-  std::filesystem::path output_hash_dir = "/workspaces/kraken2/db/test/hashes";
-  std::filesystem::path output_merge_dir = "/workspaces/kraken2/db/test/merged_hashes";
+  std::filesystem::path output_hash_dir = "/mnt/data/acenzato/kraken2/db/test/hashes";
+  std::filesystem::path output_merge_dir = "/mnt/data/acenzato/kraken2/db/test/merged_hashes";
 
   std::filesystem::create_directories(output_hash_dir);
   std::filesystem::create_directories(output_merge_dir);
@@ -323,6 +323,20 @@ void ProcessSequences(const Options &opts,
                    .count()
             << " seconds" << std::endl;  
   
+  std::cout << "Value bits: " << value_bits << std::endl;
+  std::cout << "Capacity: " << capacity << std::endl;
+
+  auto start_hash_table = std::chrono::steady_clock::now();
+  makeHashTable(output_merge_dir / "merge.bin",
+                output_merge_dir / "hash_table.bin", capacity, 32 - value_bits,
+                value_bits);
+  auto end_hash_table = std::chrono::steady_clock::now();
+  std::cerr << "Hash table creation took "
+            << std::chrono::duration_cast<std::chrono::seconds>(
+                   end_hash_table - start_hash_table)
+                   .count()
+            << " seconds" << std::endl;
+
   if (isatty(fileno(stderr)))
     std::cerr << "\r";
   std::cerr << "Completed processing of " << processed_seq_ct << " sequences, "

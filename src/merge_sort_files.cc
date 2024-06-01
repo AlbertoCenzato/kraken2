@@ -6,8 +6,10 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <memory>
 
 #include "merge_sort_files.h"
+#include "utils/streams.h"
 
 namespace fs = std::filesystem;
 
@@ -21,20 +23,21 @@ bool operator==(const IdxValue &lhs, const IdxValue &rhs) {
 }
 
 struct Data {
-  std::ifstream file_stream;
+  std::unique_ptr<IStreamReader> stream;
   IdxValue value;
   bool eof;
   bool read_mask;
 };
 
-void mergeSortStreams(std::vector<fs::path> &input_files,
-                      std::ostream &output_stream) {
+
+void mergeSortStreams(std::vector<std::unique_ptr<IStreamReader>> input_streams,
+                      IStreamWriter &output_stream) {
   auto start = std::chrono::high_resolution_clock::now();
 
   size_t total_processed_bytes = 0;
   std::vector<Data> data;
-  for (const auto &path : input_files) {
-    data.push_back(Data{.file_stream = std::ifstream{path, std::ios::binary},
+  for (auto &stream : input_streams) {
+    data.push_back(Data{.stream = std::move(stream),
                         .value = {},
                         .eof = false,
                         .read_mask = true});
@@ -47,10 +50,10 @@ void mergeSortStreams(std::vector<fs::path> &input_files,
     for (size_t i = 0; i < data.size(); i++) {
       auto &d = data[i];
       if (d.read_mask && !d.eof) {
-        d.file_stream.read(reinterpret_cast<char *>(&d.value),
+        d.stream->read(reinterpret_cast<char *>(&d.value),
                            sizeof(IdxValue));
         d.read_mask = false;
-        d.eof = d.file_stream.eof();
+        d.eof = d.stream->endOfStream();
       }
     }
 
@@ -115,15 +118,17 @@ void multiStepMerge(const fs::path &hash_dir, const fs::path &merge_dir,
     for (size_t i = 0; i < file_paths.size(); i += batch_size) {
       std::cout << "Merged files " << i << std::endl;
       size_t files_in_batch = std::min(batch_size, file_paths.size() - i);
-      auto batch_file_paths = std::vector<fs::path>();
+      auto batch_file_paths = std::vector<std::unique_ptr<IStreamReader>>();
       for (size_t j = 0; j < files_in_batch; j++) {
-        batch_file_paths.push_back(file_paths[i + j].path());
+        auto file_path = file_paths[i + j].path();
+        std::unique_ptr<IStreamReader> stream = std::make_unique<NaiveStreamReader>(file_path);
+        batch_file_paths.push_back(std::move(stream));
       }
 
       auto output_path =
           dst_dir / ("merged_" + std::to_string(i / batch_size) + ".bin");
-      auto output_stream = std::ofstream(output_path, std::ios::binary);
-      mergeSortStreams(batch_file_paths, output_stream);
+      auto output_stream = NaiveStreamWriter(output_path);
+      mergeSortStreams(std::move(batch_file_paths), output_stream);
     }
 
     // remove old files

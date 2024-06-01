@@ -7,7 +7,8 @@ add_executable(build_db
         mmscanner.cc
         omp_hack.cc
         utilities.cc
-        merge_sort_files.cc)
+        merge_sort_files.cc
+        utils/streams.cc)
 
 add_executable(classify
         classify.cc
@@ -47,11 +48,7 @@ add_executable(lookup_accession_numbers
 add_executable(k2mask
         k2mask.cc
         seqreader.cc)
-
-add_executable(test
-        merge_sort_files.cc
-        test.cc)
-
+        
 add_executable(disk_speed
         utils/disk_speed.cc)
 

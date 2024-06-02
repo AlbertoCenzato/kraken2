@@ -50,8 +50,7 @@ void mergeSortStreams(std::vector<std::unique_ptr<IStreamReader>> input_streams,
     for (size_t i = 0; i < data.size(); i++) {
       auto &d = data[i];
       if (d.read_mask && !d.eof) {
-        d.stream->read(reinterpret_cast<char *>(&d.value),
-                           sizeof(IdxValue));
+        d.stream->read(reinterpret_cast<char *>(&d.value), sizeof(IdxValue));
         d.read_mask = false;
         d.eof = d.stream->endOfStream();
       }
@@ -109,25 +108,27 @@ void multiStepMerge(const fs::path &hash_dir, const fs::path &merge_dir,
       std::vector<fs::directory_entry>{it, fs::directory_iterator{}};
   size_t iteration = 0;
   while (file_paths.size() > 1) {
-    std::cout << "Iteration " << iteration << "; files: " << file_paths.size()
-              << std::endl;
     auto dst_dir = merge_dir / ("iteration_" + std::to_string(iteration));
     fs::create_directories(dst_dir);
 
     constexpr size_t batch_size = 64;
+    constexpr size_t buffer_size = 1024*1024;
     for (size_t i = 0; i < file_paths.size(); i += batch_size) {
-      std::cout << "Merged files " << i << std::endl;
+      std::cout << "\rIteration " << iteration 
+                << " - merged files " << i << '/' << file_paths.size() 
+                << std::endl;
       size_t files_in_batch = std::min(batch_size, file_paths.size() - i);
       auto batch_file_paths = std::vector<std::unique_ptr<IStreamReader>>();
       for (size_t j = 0; j < files_in_batch; j++) {
         auto file_path = file_paths[i + j].path();
-        std::unique_ptr<IStreamReader> stream = std::make_unique<NaiveStreamReader>(file_path);
+        std::unique_ptr<IStreamReader> stream = 
+          std::make_unique<BufferedStreamReader>(file_path, buffer_size);
         batch_file_paths.push_back(std::move(stream));
       }
 
       auto output_path =
           dst_dir / ("merged_" + std::to_string(i / batch_size) + ".bin");
-      auto output_stream = NaiveStreamWriter(output_path);
+      auto output_stream = BufferedStreamWriter(output_path, batch_size*buffer_size);
       mergeSortStreams(std::move(batch_file_paths), output_stream);
     }
 
@@ -218,7 +219,7 @@ void makeHashTable(const std::filesystem::path &merged_hash_file,
     auto hash_table_file = std::ofstream(output_file, std::ios::binary);
     hash_table_file.write((char *)&capacity, sizeof(capacity));
 
-    // TODO(alberto): will be filled later
+    // NOTE(alberto): will be filled later
     size_t size = 0;
     hash_table_file.write((char *)&size, sizeof(size));
     hash_table_file.write((char *)&key_bits, sizeof(key_bits));

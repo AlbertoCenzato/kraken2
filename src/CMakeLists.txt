@@ -52,4 +52,13 @@ add_executable(k2mask
 add_executable(disk_speed
         utils/disk_speed.cc)
 
+add_executable(stream_test
+        utils/streams_test.cc
+        utils/streams.cc)    
+        
+add_executable(merge_sort_files
+        merge_sort_files.cc
+        merge_sort_files.test.cc
+        utils/streams.cc)
+
 target_link_libraries(k2mask ${ZLIB_LIBRARIES})

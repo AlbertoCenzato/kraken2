@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 2.8)
 
 project(kraken2)
 
+option(BUILD_TESTS "Build tests" OFF)
+message(STATUS "BUILD_TESTS: ${BUILD_TESTS}")
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()

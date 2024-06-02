@@ -100,8 +100,6 @@ int main(int argc, char **argv) {
   opts.min_clear_hash_value = 0;
   opts.maximum_capacity = 0;
   opts.deterministic_build = true;
-  opts.input_filename =
-      "/mnt/data/acenzato/kraken2/db/test/library/archaea/library.fna";
   ParseCommandLine(argc, argv, opts);
 
   omp_set_num_threads(opts.num_threads);
@@ -259,9 +257,10 @@ void ProcessSequences(const Options &opts,
   Sequence sequence;
   BatchSequenceReader reader;
 
-  std::filesystem::path output_hash_dir = "/mnt/data/acenzato/kraken2/db/test/hashes";
-  std::filesystem::path output_merge_dir = "/mnt/data/acenzato/kraken2/db/test/merged_hashes";
-
+  auto db_dir = std::filesystem::path{opts.hashtable_filename}.parent_path();
+  auto output_hash_dir = db_dir / "hashes";
+  auto output_merge_dir = db_dir / "merged_hashes";
+  
   std::filesystem::create_directories(output_hash_dir);
   std::filesystem::create_directories(output_merge_dir);
 
@@ -316,7 +315,8 @@ void ProcessSequences(const Options &opts,
   
 
   auto start_merge = std::chrono::steady_clock::now();
-  multiStepMerge(output_hash_dir, output_merge_dir, output_merge_dir / "merge.bin");
+  auto merge_file_path = output_merge_dir / "merge.bin";
+  multiStepMerge(output_hash_dir, output_merge_dir, merge_file_path);
   auto end_merge = std::chrono::steady_clock::now();
   std::cerr << "Merging took "
             << std::chrono::duration_cast<std::chrono::seconds>(end_merge - start_merge)
@@ -327,8 +327,7 @@ void ProcessSequences(const Options &opts,
   std::cout << "Capacity: " << capacity << std::endl;
 
   auto start_hash_table = std::chrono::steady_clock::now();
-  makeHashTable(output_merge_dir / "merge.bin",
-                output_merge_dir / "hash_table.bin", capacity, 32 - value_bits,
+  makeHashTable(merge_file_path, opts.hashtable_filename, capacity, 32 - value_bits,
                 value_bits);
   auto end_hash_table = std::chrono::steady_clock::now();
   std::cerr << "Hash table creation took "
@@ -713,6 +712,10 @@ void ParseCommandLine(int argc, char **argv, Options &opts) {
       break;
     case 'X':
       opts.input_is_protein = true;
+      break;
+    case 'z':
+      std::cout << optarg << std::endl;
+      opts.input_filename = optarg;
       break;
     }
   }

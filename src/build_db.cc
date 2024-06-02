@@ -76,7 +76,7 @@ void ProcessSequencesFast(const Options &opts,
                           const Taxonomy &taxonomy);
 void ProcessSequences(const Options &opts,
     const map<string, taxid_t> &ID_to_taxon_map,
-    CompactHashTable &kraken_index, const Taxonomy &taxonomy, 
+    const Taxonomy &taxonomy, 
     std::istream &input_stream, size_t value_bits, size_t capacity);
 void SetMinimizerLCA(CompactHashTable &hash, uint64_t minimizer, taxid_t taxid,
                      const Taxonomy &tax);
@@ -133,28 +133,29 @@ int main(int argc, char **argv) {
     actual_capacity = opts.maximum_capacity;
   }
 
-  CompactHashTable kraken_index(actual_capacity, 32 - bits_for_taxid,
-                                bits_for_taxid);
-  std::cerr << "CHT created with " << bits_for_taxid
-            << " bits reserved for taxid." << std::endl;
-
   if (opts.deterministic_build) {
     if (opts.input_filename.empty()) {
-      ProcessSequences(opts, ID_to_taxon_map, kraken_index,
+      ProcessSequences(opts, ID_to_taxon_map, 
                        taxonomy, std::cin, bits_for_taxid, actual_capacity);
     } else {
       ifstream input_file(opts.input_filename);
       if (!input_file.good())
         err(EX_NOINPUT, "unable to read from '%s'",
             opts.input_filename.c_str());
-      ProcessSequences(opts, ID_to_taxon_map, kraken_index,
+      ProcessSequences(opts, ID_to_taxon_map, 
                        taxonomy, input_file, bits_for_taxid, actual_capacity);
     }
-  } else
-    ProcessSequencesFast(opts, ID_to_taxon_map, kraken_index, taxonomy);
+  } else {
+    CompactHashTable kraken_index(actual_capacity, 32 - bits_for_taxid,
+                                bits_for_taxid);
+    std::cerr << "CHT created with " << bits_for_taxid
+            << " bits reserved for taxid." << std::endl;
 
-  std::cerr << "Writing data to disk... " << std::flush;
-  kraken_index.WriteTable(opts.hashtable_filename.c_str());
+    ProcessSequencesFast(opts, ID_to_taxon_map, kraken_index, taxonomy);
+    std::cerr << "Writing data to disk... " << std::flush;
+    kraken_index.WriteTable(opts.hashtable_filename.c_str());
+  }
+
 
   IndexOptions index_opts;
   index_opts.k = opts.k;
@@ -246,8 +247,7 @@ bool FileExists(const std::string &filename) {
 
 // Slightly slower but deterministic when multithreaded
 void ProcessSequences(const Options &opts,
-    const map<string, taxid_t> &ID_to_taxon_map,
-    CompactHashTable &kraken_index, const Taxonomy &taxonomy, 
+    const map<string, taxid_t> &ID_to_taxon_map, const Taxonomy &taxonomy, 
     std::istream &input_stream, size_t value_bits, size_t capacity) 
 {
   auto start = std::chrono::steady_clock::now();
@@ -296,7 +296,6 @@ void ProcessSequences(const Options &opts,
         output_file.write(reinterpret_cast<const char *>(hashes.data()),
                           hashes.size() * sizeof(IdxValue));
 
-        // ProcessSequence(opts, sequence.seq, taxid, kraken_index, taxonomy);
         processed_seq_ct++;
         processed_ch_ct += sequence.seq.size();
       }

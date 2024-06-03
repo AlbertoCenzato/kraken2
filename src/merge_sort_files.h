@@ -1,7 +1,9 @@
 #ifndef KRAKEN2_MERGE_SORT_FILES_H_
 #define KRAKEN2_MERGE_SORT_FILES_H_
 
+#include "utils/streams.h"
 #include <filesystem>
+#include <vector>
 
 #pragma pack(4)
 struct IdxValue{
@@ -12,6 +14,10 @@ struct IdxValue{
 // order by idx and then by value
 bool operator<(const IdxValue &lhs, const IdxValue &rhs);
 bool operator==(const IdxValue &lhs, const IdxValue &rhs);
+
+void mergeSortStreams(
+		std::vector<std::unique_ptr<IStreamReader>> input_streams,
+    IStreamWriter &output_stream);
 
 void multiStepMerge(
 	const std::filesystem::path& hash_dir, 

@@ -1,0 +1,39 @@
+{
+	"version": 3,
+	"configurePresets": [
+		{
+			"name": "linux-base",
+			"hidden": true,
+			"description": "Base linux preset",
+			"binaryDir": "${sourceDir}/build/${presetName}",
+			"installDir": "${sourceDir}/install/${presetName}",
+			"condition": {
+			  "type": "equals",
+			  "lhs": "${hostSystemName}",
+			  "rhs": "Linux"
+			}
+		},
+		{
+			"name": "linux-debug",
+			"description": "Linux debug preset",
+			"inherits": "linux-base",
+			"cacheVariables": {
+			  "CMAKE_BUILD_TYPE": "Debug"
+			}
+		},
+		{
+			"name": "linux-release",
+			"description": "Linux release preset",
+			"inherits": "linux-base",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Release"
+			}
+		}
+	],
+	"testPresets": [
+	  {
+		"name": "linux-debug",
+		"configurePreset": "linux-debug"
+	  }
+	]
+  }

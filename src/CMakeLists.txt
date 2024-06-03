@@ -7,7 +7,8 @@ add_executable(build_db
         mmscanner.cc
         omp_hack.cc
         utilities.cc
-        merge_sort_files.cc)
+        merge_sort_files.cc
+        utils/streams.cc)
 
 add_executable(classify
         classify.cc
@@ -47,9 +48,17 @@ add_executable(lookup_accession_numbers
 add_executable(k2mask
         k2mask.cc
         seqreader.cc)
+        
+add_executable(disk_speed
+        utils/disk_speed.cc)
 
-add_executable(test
+add_executable(stream_test
+        utils/streams_test.cc
+        utils/streams.cc)    
+        
+add_executable(merge_sort_files
         merge_sort_files.cc
-        test.cc)
+        merge_sort_files.test.cc
+        utils/streams.cc)
 
 target_link_libraries(k2mask ${ZLIB_LIBRARIES})

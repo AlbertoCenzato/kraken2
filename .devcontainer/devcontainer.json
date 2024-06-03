@@ -2,10 +2,15 @@
 	"name": "Kraken2",
 	"dockerFile": "Dockerfile",
 	"mounts": [
-		 {
+		{
 			"type": "volume",
-			"source": "kraken2-db",
-			"target": "/mnt/db"
+			"source": "vcpkg-binarycache",
+			"target": "/root/.cache/vcpkg/archives"
+		},
+		{
+			"type": "volume",
+			"source": "vcpkg-downloads",
+			"target": "/opt/vcpkg/downloads"
 		}
 	],
 	"remoteEnv": {

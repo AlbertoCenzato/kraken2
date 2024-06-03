@@ -8,9 +8,9 @@
 			"binaryDir": "${sourceDir}/build/${presetName}",
 			"installDir": "${sourceDir}/install/${presetName}",
 			"condition": {
-			  "type": "equals",
-			  "lhs": "${hostSystemName}",
-			  "rhs": "Linux"
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Linux"
 			}
 		},
 		{
@@ -18,7 +18,7 @@
 			"description": "Linux debug preset",
 			"inherits": "linux-base",
 			"cacheVariables": {
-			  "CMAKE_BUILD_TYPE": "Debug"
+				"CMAKE_BUILD_TYPE": "Debug"
 			}
 		},
 		{
@@ -31,9 +31,19 @@
 		}
 	],
 	"testPresets": [
-	  {
-		"name": "linux-debug",
-		"configurePreset": "linux-debug"
-	  }
+		{
+			"name": "linux-debug",
+			"configurePreset": "linux-debug"
+		}
+	],
+	"buildPresets": [
+		{
+			"name": "linux-debug",
+			"configurePreset": "linux-debug"
+		},
+		{
+			"name": "linux-release",
+			"configurePreset": "linux-release"
+		}
 	]
-  }
+}
